@@ -9,6 +9,7 @@
 library(RPostgreSQL)
 library(ranger)
 library(jsonlite)
+library(caret)
 
 ################################################################################
 # read config file
@@ -25,6 +26,7 @@ con <- dbConnect(drv, dbname = config$database,
                  user = config$username, password = config$password)
 
 ################################################################################
+# PREPARE DATA
 # read Chris' SQL query
 fileName <- '~/Documents/2017-02_YourView_data_extraction/comments.sql'
 comments.query <- readChar(fileName, file.info(fileName)$size)
@@ -80,8 +82,44 @@ comments.df2 <- comments.df2[, few.nas]
 na.sum <- apply(comments.df2, 1, numnas)
 comments.df2 <- comments.df2[na.sum==0, ]
 
-# build random forest from ranger package
-ranger(raw_evaluation ~ ., data=comments.df2)
+################################################################################
+# TRAIN-TEST SPLITS & EVALUATION
+
+# split up USERS into ten groups, and use those to partition comments
+users <- unique(comments.df2$user_id)
+# note that createFolds returns a list of *indices* of user IDs.
+flds <- createFolds(users, k = 10, list = TRUE, returnTrain = FALSE)
+# fld holds the "fold number" of each comment
+fld <- vector(mode="numeric", length=nrow(comments.df2))
+for (i in 1:10) {
+  fld[which(comments.df2$user_id %in% users[flds[[i]]])] <- i
+}
+
+# create empty vector to hold the predicitons
+predicted <- vector(mode="numeric", length=nrow(comments.df2))
+
+for (i in 1:10) {
+  # build training set and test set
+  train.set <- fld %in% setdiff(1:10, i)
+  test.set <- fld == i
+  
+  # build random forest using ranger package, on training data
+  forest <- ranger(raw_evaluation ~ ., comments.df2[train.set, ])
+  
+  # save predictions on the test set
+  test.pred <-  predict(forest, subset(comments.df2, subset=test.set, 
+                                                select=-c(raw_evaluation)))
+  predicted[test.set] <- test.pred$predictions
+}
+
+# correlation between predicted and true values
+cor(comments.df2$raw_evaluation, predicted)
+
+# TODO: better evaluation of the model 
+# TODO: repeat multiple times and average results
+# TODO: set seed for reproducible results
+# TODO: check folds for how even/uneven the group sizes are?
+# TODO: down-weight comments by prolific users
 
 
 ################################################################################
