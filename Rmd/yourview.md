@@ -161,7 +161,31 @@ Correlation between predicted and true values
 cor(comments.df2$raw_evaluation, predicted)
 ```
 
-    ## [1] 0.693446
+    ## [1] 0.6947346
+
+R squared
+
+``` r
+cor(comments.df2$raw_evaluation, predicted)^2
+```
+
+    ## [1] 0.4826562
+
+Mean squared error
+
+``` r
+sum((comments.df2$raw_evaluation - predicted)^2) / nrow(comments.df2)
+```
+
+    ## [1] 1.891821
+
+Mean absolute error
+
+``` r
+sum(abs(comments.df2$raw_evaluation - predicted)) / nrow(comments.df2)
+```
+
+    ## [1] 1.105561
 
 TODO
 ====
