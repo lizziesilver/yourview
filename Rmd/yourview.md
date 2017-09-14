@@ -44,13 +44,17 @@ Load data:
 
 ``` r
 # read Chris' SQL query, use it to load the comments data frame from the DB
-fileName <- '~/Documents/2017-02_YourView_data_extraction/comments.sql'
+fileName <- '~/yourview/SQL/comments_new.sql'
 comments.query <- readChar(fileName, file.info(fileName)$size)
 comments.df <- dbGetQuery(con, comments.query)
 
+# remove replies 
+replies <- which(comments.df$entry_order_in_thread != 1)
+comments.df <- comments.df[-replies, ]
+
 # these are the variables James used in his analysis. 
 selected.vars <- c("user_id",
-                   "commenter_credibility",
+                   #"commenter_credibility",
                    "commenter_top_level_comment_count", 
                    "commenter_reply_count", 
                    "issue_vote_count", 
@@ -59,8 +63,8 @@ selected.vars <- c("user_id",
                    "issue_argument_count", 
                    "word_count", 
                    "entry_order", # nb: James' data said "entry_order_in_issue"
-                   "entry_order_in_thread", 
-                   "argument_entry_order", 
+                   #"entry_order_in_thread", 
+                   #"argument_entry_order", 
                    "upvotes_count", 
                    "downvotes_count", 
                    "karma_score", 
@@ -76,7 +80,8 @@ selected.vars <- c("user_id",
                    "type",
                    "engaged_upvote_count", 
                    "engaged_downvote_count", 
-                   "raw_evaluation")
+                   "raw_evaluation", 
+                   "replies_to_comment")
 
 comments.df2 <- comments.df[, selected.vars]
 ```
@@ -85,12 +90,12 @@ Check out the distribution of comments per user. Note there are a few users with
 
 ``` r
 many.comments <- table(comments.df$user_id)
-hist(many.comments, breaks=100, xlab="Number of comments", ylab="Users with X comments")
+hist(many.comments, breaks=75, xlab="Number of comments", ylab="Users with X comments")
 ```
 
 ![](yourview_files/figure-markdown_github-ascii_identifiers/prolific_users-1.png)
 
-Check number of NAs in each column. Some columns have lots!
+Check number of NAs in each column. We are down to only two NA values, hooray!
 
 ``` r
 numnas <- function(x) sum(is.na(x))
@@ -122,6 +127,9 @@ comments.df2 <- comments.df2[na.sum==0, ]
 Split up USERS into ten groups, and use those to partition comments
 
 ``` r
+# set seed so results are reproducible
+set.seed(123)
+
 users <- unique(comments.df2$user_id)
 # note that createFolds returns a list of *indices* of user IDs.
 flds <- createFolds(users, k = 10, list = TRUE, returnTrain = FALSE)
@@ -161,7 +169,7 @@ Correlation between predicted and true values
 cor(comments.df2$raw_evaluation, predicted)
 ```
 
-    ## [1] 0.6947346
+    ## [1] 0.745962
 
 R squared
 
@@ -169,7 +177,7 @@ R squared
 cor(comments.df2$raw_evaluation, predicted)^2
 ```
 
-    ## [1] 0.4826562
+    ## [1] 0.5564593
 
 Mean squared error
 
@@ -177,7 +185,7 @@ Mean squared error
 sum((comments.df2$raw_evaluation - predicted)^2) / nrow(comments.df2)
 ```
 
-    ## [1] 1.891821
+    ## [1] 1.389024
 
 Mean absolute error
 
@@ -185,21 +193,46 @@ Mean absolute error
 sum(abs(comments.df2$raw_evaluation - predicted)) / nrow(comments.df2)
 ```
 
-    ## [1] 1.105561
+    ## [1] 0.9608684
 
-TODO
-====
+You might think the residual error is related to how much info we have about each commenter. There is a correlation between the error and the number of comments a person made, but it is quite small:
 
--   better evaluation of the model
--   repeat multiple times and average results
--   set seed for reproducible results
--   check folds for how even/uneven the group sizes are?
--   down-weight comments by prolific users
+``` r
+cor(comments.df2$commenter_top_level_comment_count, 
+     (comments.df2$raw_evaluation - predicted)^2)
+```
+
+    ## [1] 0.1429072
+
+In fact, all single variables have very small correlations with the error:
+
+``` r
+# comments.df2$squared.error <- (comments.df2$raw_evaluation - predicted)^2
+# numeric.cols <- vector(mode="logical", length=ncol(comments.df2))
+# for (i in 1:length(numeric.cols)) {
+#   numeric.cols[i] <- is.numeric(comments.df2[,i])
+# }
+# sum(numeric.cols)
+# error.cors <- cor(comments.df2[, which(numeric.cols)])[-26,26]
+# error.cors[order(abs(error.cors), decreasing=T)]
+```
+
+If we plot the relationship between mean squared error and number of comments, you can see there is no relationship
+
+``` r
+plot(comments.df2$commenter_top_level_comment_count, 
+     (comments.df2$raw_evaluation - predicted)^2, 
+     col = alpha("black", 0.07), pch=16,
+     xlab="Number of comments by comment author", 
+     ylab="Squared error of regression on this comment")
+```
+
+![](yourview_files/figure-markdown_github-ascii_identifiers/error_info-1.png)
 
 NOTES
 -----
 
-### PROBLEM 1: many comments made by a small number of users!
+### PROBLEM: many comments made by a small number of users!
 
 1.  how to handle this when splitting the data into train and test sets?
 2.  would not want small number of users to have undue leverage over results
@@ -211,10 +244,17 @@ NOTES
 
 Note that: \* the randomForest package does not allow you to weight *cases*. \* The ranger package allows this. \* But the ranger package does not have a method for imputing missing data.
 
-### PROBLEM 2: I don't like any of R's methods for dealing with missing data in a random forest context.
+### TODO
 
-Weka handles this by splitting the cases with missing values into "fractional instances". See: <http://weka.8497.n7.nabble.com/random-forest-and-missing-values-td30476.html>
+-   try removing features and see whether results degrade
+-   more evaluation of the model?
+-   repeat multiple times and average results
+-   set seed for reproducible results
+-   check folds for how even/uneven the group sizes are?
+-   down-weight comments by prolific users
 
-in R, you can impute values, drop cases with missing values, or drop vars.
+### DONE
 
-For now, I'll just drop vars and cases, but I'll come back to this.
+-   checked SQL query of features; fixed null values
+-   added "number of replies to this comment" feature
+-   removed replies, since they are so different to comments
