@@ -89,8 +89,9 @@ comments.df2 <- comments.df[, selected.vars]
 Check out the distribution of comments per user. Note there are a few users with many comments
 
 ``` r
-many.comments <- table(comments.df$user_id)
-hist(many.comments, breaks=75, xlab="Number of comments", ylab="Users with X comments")
+many.comments <- comments.df[, c("user_id", "commenter_top_level_comment_count")]
+many.comments <- many.comments[-which(duplicated(many.comments)), ]
+hist(many.comments$commenter_top_level_comment_count, breaks=75, xlab="Number of comments", ylab="Users with X comments", main="Users with X many comments")
 ```
 
 ![](yourview_files/figure-markdown_github-ascii_identifiers/prolific_users-1.png)
@@ -138,6 +139,9 @@ fld <- vector(mode="numeric", length=nrow(comments.df2))
 for (i in 1:10) {
   fld[which(comments.df2$user_id %in% users[flds[[i]]])] <- i
 }
+
+# remove user_id from dataset
+comments.df2$user_id <- NULL
 ```
 
 For each of the 10 folds, build a random forest using 90% of the data, and use that to predict evaluation scores for the remaining 10% of the data.
@@ -145,19 +149,29 @@ For each of the 10 folds, build a random forest using 90% of the data, and use t
 ``` r
 # create empty vector to hold the predicitons
 predicted <- vector(mode="numeric", length=nrow(comments.df2))
-
+forest.list <- list()
 for (i in 1:10) {
   # build training set and test set
   train.set <- fld %in% setdiff(1:10, i)
   test.set <- fld == i
   
   # build random forest using ranger package, on training data
-  forest <- ranger(raw_evaluation ~ ., comments.df2[train.set, ])
+  forest <- ranger(raw_evaluation ~ ., comments.df2[train.set, ], 
+                   importance="permutation")
   
   # save predictions on the test set
   test.pred <-  predict(forest, subset(comments.df2, subset=test.set, 
                                                 select=-c(raw_evaluation)))
   predicted[test.set] <- test.pred$predictions
+  
+  # save random forest model so we can average feature importances across models
+  forest.list[[i]] <- forest
+  
+  if (i == 1) {
+    importances <- data.frame(importance(forest))
+  } else {
+    importances <- cbind(importances, importance(forest))
+  }
 }
 ```
 
@@ -169,7 +183,7 @@ Correlation between predicted and true values
 cor(comments.df2$raw_evaluation, predicted)
 ```
 
-    ## [1] 0.745962
+    ## [1] 0.7389032
 
 R squared
 
@@ -177,7 +191,7 @@ R squared
 cor(comments.df2$raw_evaluation, predicted)^2
 ```
 
-    ## [1] 0.5564593
+    ## [1] 0.5459779
 
 Mean squared error
 
@@ -185,7 +199,7 @@ Mean squared error
 sum((comments.df2$raw_evaluation - predicted)^2) / nrow(comments.df2)
 ```
 
-    ## [1] 1.389024
+    ## [1] 1.428282
 
 Mean absolute error
 
@@ -193,7 +207,21 @@ Mean absolute error
 sum(abs(comments.df2$raw_evaluation - predicted)) / nrow(comments.df2)
 ```
 
-    ## [1] 0.9608684
+    ## [1] 0.9759038
+
+``` r
+impt <- as.data.frame(rowMeans(importances))
+names(impt)[1] <- "Importance"
+impt <- impt[order(impt$Importance, decreasing=T), "Importance", drop=F]
+impt$Variable <- row.names(impt)
+impt$Variable <- as.factor(impt$Variable)
+ggplot(impt, aes(Variable, Importance)) +
+  geom_col()  + 
+  theme(axis.text.x=element_text(angle=90, hjust=1)) +
+  labs(x="Variable", y="Relative Importance")
+```
+
+![](yourview_files/figure-markdown_github-ascii_identifiers/importances-1.png)
 
 You might think the residual error is related to how much info we have about each commenter. There is a correlation between the error and the number of comments a person made, but it is quite small:
 
@@ -202,7 +230,7 @@ cor(comments.df2$commenter_top_level_comment_count,
      (comments.df2$raw_evaluation - predicted)^2)
 ```
 
-    ## [1] 0.1429072
+    ## [1] 0.1800308
 
 In fact, all single variables have very small correlations with the error:
 
